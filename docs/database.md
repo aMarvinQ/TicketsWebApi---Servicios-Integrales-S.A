@@ -228,35 +228,76 @@ Al crear un ticket:
 
 ---
 
+### 8. `Password_Reset_Tokens`
+
+Almacena los tokens temporales de 6 dígitos para restablecer contraseñas.
+
+| Campo        | Tipo             | Nulo | Descripción                                         |
+|--------------|------------------|------|-----------------------------------------------------|
+| `id`         | UNIQUEIDENTIFIER | No   | Identificador único del token (PK)                  |
+| `id_usuario` | UNIQUEIDENTIFIER | No   | FK → Usuarios.id                                    |
+| `token`      | VARCHAR(255)     | No   | Código de 6 dígitos enviado al correo               |
+| `expira_en`  | DATETIME         | No   | Fecha de expiración (30 minutos desde su creación)  |
+| `usado`      | BIT              | No   | 0 = vigente, 1 = ya utilizado (default: 0)          |
+| `creado_en`  | DATETIME         | No   | Fecha de creación                                   |
+
+**Notas importantes:**
+- Al solicitar un nuevo token, todos los tokens anteriores del usuario se marcan como `usado = 1`.
+- Al usar el token exitosamente se marca como `usado = 1`.
+- El token expira en 30 minutos independientemente de si fue usado.
+- La respuesta del endpoint es siempre genérica para no revelar si el email existe (protección contra enumeración de usuarios).
+
+---
+
+### 9. `Token_Blacklist`
+
+Almacena los tokens JWT invalidados por logout para impedir su reutilización.
+
+| Campo       | Tipo             | Nulo | Descripción                                       |
+|-------------|------------------|------|---------------------------------------------------|
+| `id`        | UNIQUEIDENTIFIER | No   | Identificador único del registro (PK)             |
+| `token`     | VARCHAR(500)     | No   | Token JWT completo invalidado                     |
+| `expira_en` | DATETIME         | No   | Fecha de expiración original del JWT              |
+| `creado_en` | DATETIME         | No   | Fecha en que se cerró la sesión                   |
+
+**Notas importantes:**
+- Cada request verificado por `verificarToken` consulta esta tabla.
+- `expira_en` se toma directamente del claim `exp` del JWT.
+- Los tokens expirados en esta tabla pueden limpiarse periódicamente sin afectar la seguridad.
+
+---
+
 ## Relaciones entre tablas
 
 ```
-Roles ──────────────── Usuarios
+Roles ──────────────── Usuarios ──── Password_Reset_Tokens
                           │
               ┌───────────┼────────────┐
               │           │            │
            Tickets    Notas     Reglas_Asignacion
-              │     (creado_por)
               │
        ┌──────┴──────┐
        │             │
     Notas    Historial_Tickets
+
+Token_Blacklist  (tabla independiente, sin FK)
 ```
 
 **Relaciones detalladas:**
 
-| Tabla origen       | Campo FK         | Tabla destino | Descripción                              |
-|--------------------|------------------|---------------|------------------------------------------|
-| `Usuarios`         | `id_rol`         | `Roles`       | Un usuario tiene un rol                  |
-| `Tickets`          | `id_cliente`     | `Usuarios`    | Un ticket pertenece a un cliente         |
-| `Tickets`          | `id_agente`      | `Usuarios`    | Un ticket puede estar asignado a un agente|
-| `Tickets`          | `id_categoria`   | `Categorias`  | Un ticket pertenece a una categoría      |
-| `Notas`            | `id_ticket`      | `Tickets`     | Una nota pertenece a un ticket           |
-| `Notas`            | `id_usuario`     | `Usuarios`    | Una nota fue escrita por un usuario      |
-| `Historial_Tickets`| `id_ticket`      | `Tickets`     | Un evento pertenece a un ticket          |
-| `Historial_Tickets`| `id_usuario`     | `Usuarios`    | Un evento fue generado por un usuario    |
-| `Reglas_Asignacion`| `id_categoria`   | `Categorias`  | La regla aplica a una categoría          |
-| `Reglas_Asignacion`| `id_agente`      | `Usuarios`    | La regla asigna a un agente              |
+| Tabla origen              | Campo FK         | Tabla destino | Descripción                               |
+|---------------------------|------------------|---------------|-------------------------------------------|
+| `Usuarios`                | `id_rol`         | `Roles`       | Un usuario tiene un rol                   |
+| `Tickets`                 | `id_cliente`     | `Usuarios`    | Un ticket pertenece a un cliente          |
+| `Tickets`                 | `id_agente`      | `Usuarios`    | Un ticket puede estar asignado a un agente|
+| `Tickets`                 | `id_categoria`   | `Categorias`  | Un ticket pertenece a una categoría       |
+| `Notas`                   | `id_ticket`      | `Tickets`     | Una nota pertenece a un ticket            |
+| `Notas`                   | `id_usuario`     | `Usuarios`    | Una nota fue escrita por un usuario       |
+| `Historial_Tickets`       | `id_ticket`      | `Tickets`     | Un evento pertenece a un ticket           |
+| `Historial_Tickets`       | `id_usuario`     | `Usuarios`    | Un evento fue generado por un usuario     |
+| `Reglas_Asignacion`       | `id_categoria`   | `Categorias`  | La regla aplica a una categoría           |
+| `Reglas_Asignacion`       | `id_agente`      | `Usuarios`    | La regla asigna a un agente               |
+| `Password_Reset_Tokens`   | `id_usuario`     | `Usuarios`    | El token pertenece a un usuario           |
 
 ---
 

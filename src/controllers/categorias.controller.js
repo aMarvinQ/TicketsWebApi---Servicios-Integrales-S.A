@@ -33,7 +33,7 @@ const listarCategorias = async (req, res) => {
     request.input('offset', sql.Int, offset);
 
     const result = await request.query(`
-      SELECT id, nombre, descripcion, activo, creado_en
+      SELECT id, nombre, descripcion, prioridad_default, activo, creado_en
       FROM Categorias
       ${whereClause}
       ORDER BY nombre ASC
@@ -61,7 +61,7 @@ const obtenerCategoria = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input('id', sql.UniqueIdentifier, id)
-      .query('SELECT id, nombre, descripcion, activo, creado_en, actualizado_en FROM Categorias WHERE id = @id');
+      .query('SELECT id, nombre, descripcion, prioridad_default, activo, creado_en, actualizado_en FROM Categorias WHERE id = @id');
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'Categoría no encontrada.' });
@@ -75,11 +75,16 @@ const obtenerCategoria = async (req, res) => {
 };
 
 const crearCategoria = async (req, res) => {
-  const { nombre, descripcion } = req.body;
+  const { nombre, descripcion, prioridad_default = 'bajo' } = req.body;
   const { id } = req.usuario;
 
   if (!nombre) {
     return res.status(400).json({ mensaje: 'El nombre es requerido.' });
+  }
+
+  const prioridadesValidas = ['critico', 'alto', 'medio', 'bajo'];
+  if (!prioridadesValidas.includes(prioridad_default)) {
+    return res.status(400).json({ mensaje: 'prioridad_default no válida. Use: critico, alto, medio, bajo.' });
   }
 
   try {
@@ -96,10 +101,11 @@ const crearCategoria = async (req, res) => {
     await pool.request()
       .input('nombre', sql.VarChar, nombre)
       .input('descripcion', sql.VarChar, descripcion || null)
+      .input('prioridad_default', sql.VarChar, prioridad_default)
       .input('creado_por', sql.UniqueIdentifier, id)
       .query(`
-        INSERT INTO Categorias (id, nombre, descripcion, creado_por)
-        VALUES (NEWID(), @nombre, @descripcion, @creado_por)
+        INSERT INTO Categorias (id, nombre, descripcion, prioridad_default, creado_por)
+        VALUES (NEWID(), @nombre, @descripcion, @prioridad_default, @creado_por)
       `);
 
     res.status(201).json({ mensaje: 'Categoría creada correctamente.' });
@@ -111,10 +117,10 @@ const crearCategoria = async (req, res) => {
 
 const actualizarCategoria = async (req, res) => {
   const { id } = req.params;
-  const { nombre, descripcion } = req.body;
+  const { nombre, descripcion, prioridad_default } = req.body;
   const id_admin = req.usuario.id;
 
-  if (!nombre && !descripcion) {
+  if (!nombre && !descripcion && !prioridad_default) {
     return res.status(400).json({ mensaje: 'Debe enviar al menos un campo para actualizar.' });
   }
 
@@ -143,8 +149,9 @@ const actualizarCategoria = async (req, res) => {
     const campos = [];
     const request = pool.request().input('id', sql.UniqueIdentifier, id);
 
-    if (nombre)      { campos.push('nombre = @nombre');           request.input('nombre', sql.VarChar, nombre); }
-    if (descripcion) { campos.push('descripcion = @descripcion'); request.input('descripcion', sql.VarChar, descripcion); }
+    if (nombre)            { campos.push('nombre = @nombre');                       request.input('nombre', sql.VarChar, nombre); }
+    if (descripcion)       { campos.push('descripcion = @descripcion');             request.input('descripcion', sql.VarChar, descripcion); }
+    if (prioridad_default) { campos.push('prioridad_default = @prioridad_default'); request.input('prioridad_default', sql.VarChar, prioridad_default); }
 
     campos.push('actualizado_en = GETDATE()', 'actualizado_por = @actualizado_por');
     request.input('actualizado_por', sql.UniqueIdentifier, id_admin);

@@ -78,7 +78,7 @@ const bienvenidaClienteTemplate = ({ nombre, email, password, loginUrl = '#' }) 
 </html>
 `;
 
-const ticketCreadoTemplate = ({ nombre, numero_legible, titulo, descripcion, categoria, agente_asignado, ticketUrl = '#' }) => `
+const ticketCreadoTemplate = ({ nombre, numero_legible, titulo, descripcion, categoria, agente_asignado, canal_email = false, ticketUrl = '#' }) => `
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -133,7 +133,11 @@ const ticketCreadoTemplate = ({ nombre, numero_legible, titulo, descripcion, cat
           </tr>
         </table>
       </div>
-      <p>Nos pondremos en contacto contigo a la brevedad posible. Puedes revisar el estado de tu ticket en cualquier momento accediendo a tu cuenta en la sección <strong>Mis Solicitudes</strong>.</p>
+      ${canal_email
+        ? `<p>Un agente revisará tu solicitud y se pondrá en contacto contigo a través de este correo electrónico a la brevedad posible.</p>
+      <p>También puedes revisar el estado de tu ticket accediendo a tu cuenta en la sección <strong>Mis Solicitudes</strong>.</p>`
+        : `<p>Nos pondremos en contacto contigo a la brevedad posible. Puedes revisar el estado de tu ticket en cualquier momento accediendo a tu cuenta en la sección <strong>Mis Solicitudes</strong>.</p>`
+      }
       <a href="${ticketUrl}" class="btn">Ver mis solicitudes</a>
     </div>
     <div class="footer">

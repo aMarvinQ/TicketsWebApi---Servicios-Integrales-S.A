@@ -5,7 +5,12 @@
 
 ## Descripción General
 
-El módulo de integraciones expone endpoints protegidos por API Key (no por JWT) para recibir tickets desde sistemas externos como Google Forms o un listener de correo electrónico.
+El módulo de integraciones permite recibir tickets desde sistemas externos mediante dos canales:
+
+- **Google Forms** — endpoint protegido por API Key que recibe datos del formulario vía Apps Script
+- **Correo electrónico** — listener IMAP que revisa la bandeja de entrada periódicamente y convierte correos en tickets automáticamente
+
+Ambos canales comparten la misma lógica: buscan o crean el cliente por email, asignan agente por menor carga, crean el ticket y envían correos de confirmación.
 
 ---
 
@@ -13,9 +18,11 @@ El módulo de integraciones expone endpoints protegidos por API Key (no por JWT)
 
 | Archivo | Descripción |
 |---------|-------------|
-| `src/controllers/integraciones.controller.js` | Lógica de cada integración |
+| `src/controllers/integraciones.controller.js` | Lógica del canal Google Forms |
 | `src/routes/integraciones.routes.js` | Definición de rutas |
 | `src/middlewares/apiKey.middleware.js` | Verificación de API Key |
+| `src/services/emailListener.js` | Listener IMAP para canal email |
+| `server.js` | Arranca el listener al iniciar el servidor |
 
 ---
 
@@ -77,11 +84,12 @@ Content-Type: application/json
 
 **Comportamiento:**
 
-- Si el email **ya existe** en el sistema → se usa ese usuario como cliente.
-- Si el email **no existe** → se crea el usuario automáticamente con rol `cliente`. La contraseña temporal es el email hasheado con bcrypt. El cliente debe cambiarla al iniciar sesión por primera vez.
+- Si el email **ya existe** → se usa ese usuario como cliente.
+- Si el email **no existe** → se crea automáticamente con rol `cliente`. La contraseña temporal es su propio email. Se envía un **email de bienvenida** con sus credenciales de acceso.
 - La prioridad se toma de `prioridad_default` de la categoría.
 - El agente se asigna automáticamente por menor carga.
 - El ticket se registra con `canal = 'forms'`.
+- Se envía un **email de confirmación** al cliente con los detalles del ticket creado.
 
 **Respuesta exitosa `201`:**
 ```json
@@ -239,3 +247,95 @@ Después de enviar una respuesta de prueba al formulario:
 1. En Apps Script → **Ejecuciones** → abrir la última ejecución de `onFormSubmit`
 2. Verificar que los logs muestren `Status: 201`
 3. Verificar en la base de datos que el ticket fue creado en la tabla `Tickets`
+
+---
+
+## Canal Email (Listener IMAP)
+
+### Descripción
+
+El listener IMAP se conecta periódicamente a la bandeja de entrada del correo configurado y convierte cada correo no leído en un ticket. No requiere ninguna acción del frontend — opera completamente en el backend.
+
+### Archivos
+
+| Archivo | Descripción |
+|---------|-------------|
+| `src/services/emailListener.js` | Lógica del listener |
+| `server.js` | Llama a `iniciarEmailListener()` al arrancar |
+
+### Variables de entorno
+
+```env
+IMAP_USER=tu-correo@gmail.com
+IMAP_PASS=xxxx xxxx xxxx xxxx
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+EMAIL_LISTENER_INTERVAL_MS=120000
+EMAIL_CATEGORIA_DEFAULT=General
+```
+
+| Variable | Descripción |
+|----------|-------------|
+| `IMAP_USER` | Correo Gmail que recibe los tickets (misma cuenta usada para envío) |
+| `IMAP_PASS` | App Password de Gmail (16 caracteres, con espacios) |
+| `IMAP_HOST` | Servidor IMAP. Para Gmail siempre `imap.gmail.com` |
+| `IMAP_PORT` | Puerto IMAP seguro. Para Gmail siempre `993` |
+| `EMAIL_LISTENER_INTERVAL_MS` | Cada cuánto revisa la bandeja en milisegundos. Default: `120000` (2 minutos) |
+| `EMAIL_CATEGORIA_DEFAULT` | Nombre de la categoría asignada a todos los tickets por email. Default: `General` |
+
+### Flujo completo
+
+```
+Cliente envía correo a la bandeja de la empresa
+  └── Cada N segundos el listener revisa correos no leídos
+        ├── Parsea: remitente (email + nombre), asunto (título), cuerpo (descripción)
+        ├── Busca o crea el cliente por email
+        │     └── Si es nuevo → envía email de bienvenida con credenciales
+        ├── Asigna categoría default + prioridad_default de esa categoría
+        ├── Asigna agente por menor carga
+        ├── Crea ticket con canal = 'email'
+        ├── Registra en Historial_Tickets (creacion + asignacion)
+        ├── Envía email de confirmación al cliente
+        └── Marca el correo como leído (no se reprocesa)
+```
+
+### Comportamiento detallado
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Título del ticket** | Asunto del correo |
+| **Descripción** | Cuerpo del correo en texto plano (máximo 2000 caracteres) |
+| **Categoría** | Siempre la definida en `EMAIL_CATEGORIA_DEFAULT` |
+| **Prioridad** | `prioridad_default` de la categoría asignada |
+| **Cliente nuevo** | Se crea automáticamente. Contraseña temporal = su email |
+| **Email de bienvenida** | Se envía solo si el cliente fue creado en ese momento |
+| **Email de confirmación** | Siempre se envía. Indica que el agente se contactará por este mismo correo |
+| **Error en un correo** | Se marca como leído y se continúa con el siguiente. El error se loguea en consola |
+| **Arranque** | El listener hace una revisión inmediata al iniciar el servidor, luego cada `EMAIL_LISTENER_INTERVAL_MS` ms |
+
+### Configurar IMAP en Gmail
+
+Para que el listener pueda conectarse a Gmail por IMAP:
+
+1. Ir a **Configuración de Gmail → Ver toda la configuración → Reenvío y correo POP/IMAP**
+2. En la sección IMAP → activar **"Habilitar IMAP"** → Guardar
+3. Usar el **App Password** de la cuenta (el mismo de `MAIL_PASS`) como `IMAP_PASS`
+
+> Si `MAIL_PASS` e `IMAP_PASS` usan la misma cuenta de Gmail, el valor es el mismo App Password.
+
+### Logs en consola
+
+El listener imprime mensajes en consola para seguimiento:
+
+```
+[EmailListener] Iniciado. Revisando cada 120s. Categoría default: "General"
+[EmailListener] 2 correo(s) no leído(s) encontrado(s).
+[EmailListener] Ticket TKT-00005 creado desde correo de cliente@ejemplo.com
+[EmailListener] Error de conexión IMAP: ...
+```
+
+### Consideraciones
+
+- El correo queda marcado como leído aunque falle la creación del ticket, para evitar bucles de reprocesamiento.
+- Si la categoría definida en `EMAIL_CATEGORIA_DEFAULT` no existe o está deshabilitada, el correo se ignora y se loguea una advertencia.
+- No hay un endpoint REST para este canal — opera exclusivamente como servicio de fondo.

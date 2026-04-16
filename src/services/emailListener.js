@@ -162,35 +162,48 @@ const revisarCorreos = async () => {
     logger: false,
   });
 
+  // Capturar errores de socket para que no maten el proceso
+  client.on('error', (err) => {
+    console.error('[EmailListener] Error de socket IMAP:', err.message);
+  });
+
   try {
     await client.connect();
     const lock = await client.getMailboxLock('INBOX');
 
     try {
-      // Buscar correos no leídos
-      const mensajes = await client.search({ seen: false });
+      // Buscar UIDs de correos no leídos
+      const uids = await client.search({ seen: false }, { uid: true });
 
-      if (mensajes.length === 0) {
+      if (uids.length === 0) {
         return;
       }
 
-      console.log(`[EmailListener] ${mensajes.length} correo(s) no leído(s) encontrado(s).`);
+      console.log(`[EmailListener] ${uids.length} correo(s) no leído(s) encontrado(s).`);
 
       const pool = await getConnection();
 
-      for await (const msg of client.fetch(mensajes, { source: true })) {
-        try {
-          const parsed = await simpleParser(msg.source);
-          await procesarCorreo(pool, parsed);
+      // Paso 1: recolectar todos los mensajes antes de procesar
+      // (no se puede llamar messageFlagsAdd mientras el stream de fetch está activo)
+      const mensajes = [];
+      for await (const msg of client.fetch(uids, { source: true, uid: true }, { uid: true })) {
+        mensajes.push({ uid: msg.uid, source: msg.source });
+      }
 
-          // Marcar como leído
-          await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true });
+      // Paso 2: procesar cada mensaje
+      for (const { uid, source } of mensajes) {
+        try {
+          const parsed = await simpleParser(source);
+          await procesarCorreo(pool, parsed);
         } catch (err) {
           console.error('[EmailListener] Error al procesar correo:', err.message);
-          // Marcar como leído igual para no reprocesarlo en el próximo ciclo
-          await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true });
         }
       }
+
+      // Paso 3: marcar todos como leídos de una vez (stream ya cerrado)
+      const uidRange = mensajes.map(m => m.uid).join(',');
+      await client.messageFlagsAdd(uidRange, ['\\Seen'], { uid: true });
+      console.log(`[EmailListener] ${mensajes.length} correo(s) marcado(s) como leído(s).`);
     } finally {
       lock.release();
     }
@@ -198,6 +211,7 @@ const revisarCorreos = async () => {
     await client.logout();
   } catch (err) {
     console.error('[EmailListener] Error de conexión IMAP:', err.message);
+    try { await client.logout(); } catch (_) {}
   }
 };
 

@@ -199,6 +199,11 @@ const listarTickets = async (req, res) => {
 
     let where = 'WHERE 1=1';
 
+    // Ocultar tickets marcados como ocultos, salvo que se filtre explícitamente por cerrado
+    if (estado !== 'cerrado') {
+      where += ' AND t.oculto = 0';
+    }
+
     // Visibilidad por rol
     if (rol === 'cliente') {
       where += ' AND t.id_cliente = @id_usuario';
@@ -277,6 +282,7 @@ const listarTickets = async (req, res) => {
       SELECT
         t.id, t.numero_legible, t.titulo, t.estado, t.prioridad, t.canal,
         t.creado_en, t.fecha_cierre,
+        t.id_categoria, t.id_agente,
         c.nombre  AS categoria,
         uc.nombre + ' ' + uc.apellido AS cliente,
         uc.email  AS cliente_email,
@@ -545,4 +551,152 @@ const cambiarPrioridad = async (req, res) => {
   }
 };
 
-module.exports = { crearTicket, listarTickets, obtenerTicket, cambiarEstado, asignarAgente, cambiarPrioridad };
+// =============================================
+// ACTUALIZAR TICKET (campos individuales o combinados)
+// =============================================
+
+const actualizarTicket = async (req, res) => {
+  const { id } = req.params;
+  const { id: id_usuario } = req.usuario;
+  const { estado, prioridad, id_agente, id_categoria } = req.body;
+
+  if (!estado && !prioridad && !id_agente && !id_categoria) {
+    return res.status(400).json({ mensaje: 'Envía al menos un campo: estado, prioridad, id_agente o id_categoria.' });
+  }
+
+  try {
+    const pool = await getConnection();
+
+    const existe = await pool.request()
+      .input('id', sql.UniqueIdentifier, id)
+      .query('SELECT id, estado, prioridad FROM Tickets WHERE id = @id');
+
+    if (existe.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'Ticket no encontrado.' });
+    }
+
+    const actual = existe.recordset[0];
+    const setClauses = [];
+    const historial  = [];
+    const req_       = pool.request()
+      .input('id',         sql.UniqueIdentifier, id)
+      .input('id_usuario', sql.UniqueIdentifier, id_usuario);
+
+    if (estado) {
+      const estadosValidos = ['abierto', 'en_progreso', 'resuelto', 'cerrado'];
+      if (!estadosValidos.includes(estado)) {
+        return res.status(400).json({ mensaje: `estado no válido. Use: ${estadosValidos.join(', ')}.` });
+      }
+      setClauses.push('estado = @estado');
+      if (estado === 'cerrado') setClauses.push('fecha_cierre = GETDATE()');
+      req_.input('estado', sql.VarChar, estado);
+      historial.push({ accion: 'cambio_estado', detalle: `Estado cambiado de "${actual.estado}" a "${estado}"` });
+    }
+
+    if (prioridad) {
+      const prioridadesValidas = ['critico', 'alto', 'medio', 'bajo'];
+      if (!prioridadesValidas.includes(prioridad)) {
+        return res.status(400).json({ mensaje: `prioridad no válida. Use: ${prioridadesValidas.join(', ')}.` });
+      }
+      setClauses.push('prioridad = @prioridad');
+      req_.input('prioridad', sql.VarChar, prioridad);
+      historial.push({ accion: 'cambio_estado', detalle: `Prioridad cambiada de "${actual.prioridad}" a "${prioridad}"` });
+    }
+
+    if (id_agente) {
+      const agenteResult = await pool.request()
+        .input('id_agente', sql.UniqueIdentifier, id_agente)
+        .query(`
+          SELECT u.id FROM Usuarios u
+          INNER JOIN Roles r ON r.id = u.id_rol
+          WHERE u.id = @id_agente AND r.nombre = 'agente' AND u.activo = 1
+        `);
+      if (agenteResult.recordset.length === 0) {
+        return res.status(400).json({ mensaje: 'El agente no existe o no tiene rol agente.' });
+      }
+      setClauses.push('id_agente = @id_agente');
+      req_.input('id_agente', sql.UniqueIdentifier, id_agente);
+      historial.push({ accion: 'asignacion', detalle: 'Agente reasignado manualmente' });
+    }
+
+    if (id_categoria) {
+      const catResult = await pool.request()
+        .input('id_categoria', sql.UniqueIdentifier, id_categoria)
+        .query('SELECT id FROM Categorias WHERE id = @id_categoria AND activo = 1');
+      if (catResult.recordset.length === 0) {
+        return res.status(400).json({ mensaje: 'La categoría no existe o está deshabilitada.' });
+      }
+      setClauses.push('id_categoria = @id_categoria');
+      req_.input('id_categoria', sql.UniqueIdentifier, id_categoria);
+    }
+
+    setClauses.push('actualizado_en = GETDATE()', 'actualizado_por = @id_usuario');
+
+    await req_.query(`UPDATE Tickets SET ${setClauses.join(', ')} WHERE id = @id`);
+
+    for (const h of historial) {
+      await pool.request()
+        .input('id_ticket',  sql.UniqueIdentifier, id)
+        .input('id_usuario', sql.UniqueIdentifier, id_usuario)
+        .input('accion',     sql.VarChar, h.accion)
+        .input('detalle',    sql.VarChar, h.detalle)
+        .query(`
+          INSERT INTO Historial_Tickets (id, id_ticket, id_usuario, accion, detalle)
+          VALUES (NEWID(), @id_ticket, @id_usuario, @accion, @detalle)
+        `);
+    }
+
+    res.json({ mensaje: 'Ticket actualizado correctamente.' });
+  } catch (error) {
+    console.error('Error en actualizarTicket:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor.' });
+  }
+};
+
+// =============================================
+// OCULTAR TICKET
+// =============================================
+
+const ocultarTicket = async (req, res) => {
+  const { id } = req.params;
+  const { id: id_usuario, rol } = req.usuario;
+
+  try {
+    const pool = await getConnection();
+
+    const existe = await pool.request()
+      .input('id', sql.UniqueIdentifier, id)
+      .query('SELECT id, id_cliente, id_agente, estado FROM Tickets WHERE id = @id');
+
+    if (existe.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'Ticket no encontrado.' });
+    }
+
+    const ticket = existe.recordset[0];
+
+    if (rol === 'cliente' && ticket.id_cliente !== id_usuario) {
+      return res.status(403).json({ mensaje: 'No tienes acceso a este ticket.' });
+    }
+    if (rol === 'agente' && ticket.id_agente !== id_usuario) {
+      return res.status(403).json({ mensaje: 'No tienes acceso a este ticket.' });
+    }
+
+    await pool.request()
+      .input('id',         sql.UniqueIdentifier, id)
+      .input('id_usuario', sql.UniqueIdentifier, id_usuario)
+      .query(`
+        UPDATE Tickets
+        SET oculto          = 1,
+            actualizado_en  = GETDATE(),
+            actualizado_por = @id_usuario
+        WHERE id = @id
+      `);
+
+    res.json({ mensaje: 'Ticket ocultado correctamente.' });
+  } catch (error) {
+    console.error('Error en ocultarTicket:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor.' });
+  }
+};
+
+module.exports = { crearTicket, listarTickets, obtenerTicket, cambiarEstado, asignarAgente, cambiarPrioridad, ocultarTicket, actualizarTicket };

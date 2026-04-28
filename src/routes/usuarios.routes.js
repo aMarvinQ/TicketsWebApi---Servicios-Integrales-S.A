@@ -4,7 +4,7 @@ const {
   obtenerPerfil, actualizarPerfil, cambiarPassword,
   listarUsuarios, obtenerUsuario, crearUsuario,
   actualizarUsuario, resetPasswordAdmin, toggleActivo,
-  listarAgentes,
+  listarAgentes, listarClientes,
 } = require('../controllers/usuarios.controller');
 
 const router = Router();
@@ -16,8 +16,9 @@ router.get('/perfil',                    obtenerPerfil);
 router.put('/perfil',                    actualizarPerfil);
 router.put('/perfil/cambiar-password',   cambiarPassword);
 
-// Consulta de agentes
+// Consulta de agentes y clientes
 router.get('/agentes',                   listarAgentes);
+router.get('/clientes',                  listarClientes);
 
 // Gestión de usuarios (solo admin)
 router.get('/',                          soloAdmin, listarUsuarios);

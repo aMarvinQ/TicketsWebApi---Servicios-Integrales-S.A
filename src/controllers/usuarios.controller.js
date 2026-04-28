@@ -47,7 +47,7 @@ const actualizarPerfil = async (req, res) => {
 
     if (nombre)   { campos.push('nombre = @nombre');     request.input('nombre', sql.VarChar, nombre); }
     if (apellido) { campos.push('apellido = @apellido'); request.input('apellido', sql.VarChar, apellido); }
-    if (telefono) { campos.push('telefono = @telefono'); request.input('telefono', sql.VarChar, telefono); }
+    campos.push('telefono = @telefono'); request.input('telefono', sql.VarChar, telefono);
 
     campos.push('actualizado_en = GETDATE()', 'actualizado_por = @actualizado_por');
     request.input('actualizado_por', sql.UniqueIdentifier, id);
@@ -408,8 +408,25 @@ const toggleActivo = async (req, res) => {
 };
 
 // =============================================
-// CONSULTA DE AGENTES
+// CONSULTA DE AGENTES / CLIENTES
 // =============================================
+
+const listarClientes = async (req, res) => {
+  try {
+    const pool = await getConnection();
+    const result = await pool.request().query(`
+      SELECT u.id, u.nombre, u.apellido, u.email
+      FROM Usuarios u
+      INNER JOIN Roles r ON r.id = u.id_rol
+      WHERE r.nombre = 'cliente' AND u.activo = 1
+      ORDER BY u.nombre
+    `);
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('Error en listarClientes:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor.' });
+  }
+};
 
 const listarAgentes = async (req, res) => {
   try {
@@ -432,5 +449,5 @@ module.exports = {
   obtenerPerfil, actualizarPerfil, cambiarPassword,
   listarUsuarios, obtenerUsuario, crearUsuario,
   actualizarUsuario, resetPasswordAdmin, toggleActivo,
-  listarAgentes,
+  listarAgentes, listarClientes,
 };

@@ -179,6 +179,10 @@ const listarHistorial = async (req, res) => {
     const acceso = await verificarAccesoTicket(pool, id_ticket, id_usuario, rol);
     if (acceso.error) return res.status(acceso.error).json({ mensaje: acceso.mensaje });
 
+    const filtroInterna = rol === 'cliente'
+      ? "AND NOT (h.accion = 'nota_agregada' AND h.detalle = 'Nota interna agregada')"
+      : '';
+
     const result = await pool.request()
       .input('id_ticket', sql.UniqueIdentifier, id_ticket)
       .query(`
@@ -189,7 +193,7 @@ const listarHistorial = async (req, res) => {
         FROM Historial_Tickets h
         INNER JOIN Usuarios u ON u.id = h.id_usuario
         INNER JOIN Roles    r ON r.id = u.id_rol
-        WHERE h.id_ticket = @id_ticket
+        WHERE h.id_ticket = @id_ticket ${filtroInterna}
         ORDER BY h.creado_en ASC
       `);
 
